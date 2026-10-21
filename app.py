@@ -290,6 +290,27 @@ def busqueda_lineal(registros, campo, objetivo):
 # =============================================================================
 # 5. Ronda completa: ordenar -> buscar -> actualizar Método Alfa
 # =============================================================================
+def valor_texto(reg, campo):
+    """Valor de un campo como texto (el costo con 2 decimales)."""
+    v = getattr(reg, campo)
+    return f"{v:.2f}" if campo == "costo_maniobra_usd" else str(v)
+
+
+def generar_txt_ordenado(registros, campo, metodo, tiempo_ns, comparaciones, movimientos):
+    """Contenido del .txt descargable: resumen del benchmarking + lista ordenada."""
+    lineas = [
+        "PROYECTO 21: FISCALIZACIÓN Y REGISTRO DE TRÁFICO EN PUERTOS MARÍTIMOS",
+        f"Se ordenaron {len(registros):,} registros por el campo {campo} usando el método "
+        f"{metodo} en {tiempo_ns} nanosegundos. Comparaciones: {comparaciones}, "
+        f"Intercambios/Movimientos: {movimientos}",
+        "",
+        " | ".join(TODOS_LOS_CAMPOS),
+    ]
+    for reg in registros:
+        lineas.append(" | ".join(valor_texto(reg, c) for c in TODOS_LOS_CAMPOS))
+    return "\n".join(lineas) + "\n"
+
+
 def ejecutar_ronda():
     # Cada ronda parte del orden original del CSV
     registros_ram = list(st.session_state.registros_base)
@@ -324,6 +345,8 @@ def ejecutar_ronda():
         "ns_orden": tiempo_ns, "comparaciones": comparaciones, "movimientos": movimientos,
         "tipo_busqueda": tipo_busqueda, "campo_busqueda": campo_busq,
         "objetivo": objetivo, "posicion": posicion, "ns_busqueda": ns_busq, "pasos": pasos,
+        "txt": generar_txt_ordenado(registros_ram, campo, metodo, tiempo_ns,
+                                    comparaciones, movimientos),
     }
 
 
@@ -348,21 +371,37 @@ def mostrar_30_30(registros):
 # =============================================================================
 # 7. Aplicación web
 # =============================================================================
-st.set_page_config(page_title="Proyecto 21 - Puertos Marítimos", page_icon="⚓", layout="wide")
+st.set_page_config(page_title="Proyecto 21 - Puertos Marítimos", page_icon="⚓",
+                   layout="wide", initial_sidebar_state="expanded")
+
+# Estilo visual: números de las métricas más grandes y con color de acento.
+# (#00B4D8 es el mismo color primario de .streamlit/config.toml)
+st.markdown("""
+<style>
+[data-testid="stMetricValue"] { font-size: 1.8rem; color: #00B4D8; }
+[data-testid="stMetricValue"] div {
+    white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere;
+}
+[data-testid="stMetricLabel"] { opacity: 0.8; }
+h1 { letter-spacing: 1px; }
+</style>
+""", unsafe_allow_html=True)
 
 # Estado persistente (sobrevive a las recargas de Streamlit)
 if "alfa" not in st.session_state:
     st.session_state.alfa = {m: 0 for m in METODOS}
     st.session_state.rondas = 0
 
-# --- Introducción ---
+# --- Encabezado ---
 st.title("⚓ PROYECTO 21: FISCALIZACIÓN Y REGISTRO DE TRÁFICO EN PUERTOS MARÍTIMOS")
+st.caption("Estructuras de datos: algoritmos de ordenamiento y búsqueda con benchmarking")
 st.write(
     "Aplicación que carga 15,000 registros portuarios (puertos y fechas reales de los datos de "
     "SEMAR, con campos numéricos simulados) en la memoria RAM como objetos `RegistroPortuario`, "
     "los ordena con un algoritmo elegido al azar (Radix, Bucket o Quick Sort), busca un dato con "
     "Búsqueda Binaria o Lineal y mide tiempos, comparaciones y movimientos."
 )
+st.divider()
 
 # --- Carga a RAM (una sola vez por sesión) ---
 if "registros_base" not in st.session_state:
@@ -384,58 +423,114 @@ if "resultado" not in st.session_state:
     ejecutar_ronda()
 
 n_total = len(st.session_state.registros_base)
-st.success(f"[ÉXITO] Se cargaron {n_total:,} registros a la memoria RAM.")
-st.metric("Tiempo de carga a la RAM", f"{st.session_state.tiempo_carga:,} ns")
-
-st.button("🔄 Ejecutar nueva ronda (ordenar + buscar)", type="primary", on_click=ejecutar_ronda)
-
 res = st.session_state.resultado
 
-# --- Tabla 30 + 30 ---
-st.header("Vista de los registros (primeros 30 y últimos 30)")
-tab_orden, tab_csv = st.tabs([f"Después de ordenar por {res['campo']}", "Orden original del CSV"])
-with tab_orden:
-    mostrar_30_30(res["registros_ordenados"])
-with tab_csv:
-    mostrar_30_30(st.session_state.registros_base)
+# --- Barra lateral: controles y Método Alfa ---
+with st.sidebar:
+    st.header("Controles")
+    st.button("🔄 Nueva ronda (ordenar + buscar)", type="primary", on_click=ejecutar_ronda)
+    st.divider()
+    st.subheader("Método Alfa")
+    st.caption("Veces que se seleccionó cada método de ordenamiento")
+    for metodo in METODOS:
+        st.metric(metodo, st.session_state.alfa[metodo])
+    st.metric("Rondas totales", st.session_state.rondas)
+    st.bar_chart(pd.DataFrame({"Veces seleccionado": st.session_state.alfa}))
+    st.caption("Los contadores son por visitante y se reinician al recargar la página.")
+
+# --- Carga a RAM ---
+with st.container(border=True):
+    col_ok, col_t = st.columns([2, 1])
+    col_ok.success(f"[ÉXITO] Se cargaron {n_total:,} registros a la memoria RAM.")
+    col_t.metric("Tiempo de carga a la RAM", f"{st.session_state.tiempo_carga:,} ns")
 
 # --- Benchmarking de ordenación ---
-st.header("Benchmarking de Ordenación")
-st.info(
-    f"Se ordenaron {n_total:,} registros por el campo {res['campo']} "
-    f"usando el método {res['metodo']} en {res['ns_orden']} nanosegundos. "
-    f"Comparaciones: {res['comparaciones']}, Intercambios/Movimientos: {res['movimientos']}"
-)
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Campo ordenado", res["campo"])
-c2.metric("Método", res["metodo"])
-c3.metric("Tiempo (ns)", f"{res['ns_orden']:,}")
-c4.metric("Comparaciones / Movimientos", f"{res['comparaciones']:,} / {res['movimientos']:,}")
+with st.container(border=True):
+    st.subheader("Benchmarking de Ordenación")
+    st.info(
+        f"Se ordenaron {n_total:,} registros por el campo {res['campo']} "
+        f"usando el método {res['metodo']} en {res['ns_orden']} nanosegundos. "
+        f"Comparaciones: {res['comparaciones']}, Intercambios/Movimientos: {res['movimientos']}"
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Campo ordenado", res["campo"])
+    c2.metric("Método", res["metodo"])
+    c3.metric("Tiempo (ns)", f"{res['ns_orden']:,}")
+    c4.metric("Comparaciones / Movimientos", f"{res['comparaciones']:,} / {res['movimientos']:,}")
+    st.download_button(
+        "⬇️ Descargar lista ordenada (.txt)",
+        data=res["txt"],
+        file_name=f"registros_ordenados_por_{res['campo']}.txt",
+        mime="text/plain",
+    )
 
 # --- Benchmarking de búsqueda ---
-st.header("Benchmarking de Búsqueda")
-encontrado = res["posicion"] >= 0
-st.info(
-    f"Búsqueda {res['tipo_busqueda']} sobre el campo {res['campo_busqueda']} "
-    f"del valor {res['objetivo']!r}: "
-    + (f"encontrado en la posición {res['posicion'] + 1:,}" if encontrado else "no encontrado")
-    + f" en {res['ns_busqueda']} nanosegundos ({res['pasos']:,} pasos)."
-)
-b1, b2, b3, b4 = st.columns(4)
-b1.metric("Tipo de búsqueda", res["tipo_busqueda"])
-b2.metric("Campo buscado", res["campo_busqueda"])
-b3.metric("Valor buscado", str(res["objetivo"]))
-b4.metric("Tiempo (ns)", f"{res['ns_busqueda']:,}")
-if res["tipo_busqueda"] == "Binaria":
-    st.caption("La búsqueda binaria usa el campo que acaba de ordenarse en esta ronda.")
-else:
-    st.caption("La búsqueda lineal recorre la lista secuencialmente sobre un campo elegido al azar "
-               "(clave o informativo).")
+with st.container(border=True):
+    st.subheader("Benchmarking de Búsqueda")
+    encontrado = res["posicion"] >= 0
+    st.info(
+        f"Búsqueda {res['tipo_busqueda']} sobre el campo {res['campo_busqueda']} "
+        f"del valor {res['objetivo']!r}: "
+        + (f"encontrado en la posición {res['posicion'] + 1:,}" if encontrado else "no encontrado")
+        + f" en {res['ns_busqueda']} nanosegundos ({res['pasos']:,} pasos)."
+    )
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("Tipo de búsqueda", res["tipo_busqueda"])
+    b2.metric("Campo buscado", res["campo_busqueda"])
+    b3.metric("Valor buscado", str(res["objetivo"]))
+    b4.metric("Tiempo (ns)", f"{res['ns_busqueda']:,}")
+    if res["tipo_busqueda"] == "Binaria":
+        st.caption("La búsqueda binaria usa el campo que acaba de ordenarse en esta ronda.")
+    else:
+        st.caption("La búsqueda lineal recorre la lista secuencialmente sobre un campo elegido al "
+                   "azar (clave o informativo).")
 
-# --- Método Alfa ---
-st.header("Método Alfa: veces que se seleccionó cada método de ordenamiento")
-a1, a2, a3, a4 = st.columns(4)
-for col, metodo in zip((a1, a2, a3), METODOS):
-    col.metric(metodo, st.session_state.alfa[metodo])
-a4.metric("Rondas totales", st.session_state.rondas)
-st.bar_chart(pd.DataFrame({"Veces seleccionado": st.session_state.alfa}))
+# --- Consulta por ID ---
+with st.container(border=True):
+    st.subheader("Consulta por ID de contenedor")
+    lista = res["registros_ordenados"]
+    ejemplo = lista[0].id_contenedor_teu
+    entrada = st.text_input("Escribe el id_contenedor_teu a buscar",
+                            placeholder=f"Ejemplo: {ejemplo}").strip()
+    if entrada:
+        if not (entrada.isascii() and entrada.isdigit()):
+            st.error("El ID debe ser un número entero (solo dígitos).")
+        else:
+            id_buscado = int(entrada)
+            # Binaria solo si la lista quedó ordenada por este mismo campo en la ronda actual;
+            # en cualquier otro caso se usa la búsqueda lineal (secuencial).
+            if res["campo"] == "id_contenedor_teu":
+                tipo_id = "Binaria"
+                pos_id, ns_id, pasos_id = busqueda_binaria(lista, "id_contenedor_teu", id_buscado)
+            else:
+                tipo_id = "Lineal (secuencial)"
+                pos_id, ns_id, pasos_id = busqueda_lineal(lista, "id_contenedor_teu", id_buscado)
+
+            i1, i2, i3, i4 = st.columns(4)
+            i1.metric("Tipo de búsqueda", tipo_id)
+            i2.metric("Tiempo (ns)", f"{ns_id:,}")
+            i3.metric("Pasos", f"{pasos_id:,}")
+            i4.metric("Posición", f"{pos_id + 1:,}" if pos_id >= 0 else "—")
+
+            if pos_id >= 0:
+                st.success(f"Contenedor {id_buscado} encontrado con búsqueda {tipo_id}.")
+                reg = lista[pos_id]
+                st.dataframe(
+                    pd.DataFrame({"Campo": TODOS_LOS_CAMPOS,
+                                  "Valor": [valor_texto(reg, c) for c in TODOS_LOS_CAMPOS]}),
+                    hide_index=True,
+                )
+            else:
+                st.warning(f"No existe ningún contenedor con id_contenedor_teu = {id_buscado}.")
+    st.caption("Si en esta ronda la lista se ordenó por id_contenedor_teu se usa búsqueda binaria; "
+               "si no, búsqueda lineal (secuencial), porque la binaria exige la lista ordenada "
+               "por el campo buscado.")
+
+# --- Tabla 30 + 30 ---
+with st.container(border=True):
+    st.subheader("Vista de los registros (primeros 30 y últimos 30)")
+    tab_orden, tab_csv = st.tabs([f"Después de ordenar por {res['campo']}", "Orden original del CSV"])
+    with tab_orden:
+        mostrar_30_30(res["registros_ordenados"])
+    with tab_csv:
+        mostrar_30_30(st.session_state.registros_base)
